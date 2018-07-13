@@ -129,6 +129,11 @@ string trim(const string& str,
 	return str.substr(strBegin, strRange);
 }
 
+bool startsWith(string str, string match)
+{
+	return str.find(match.c_str(), 0, match.length()) == 0;
+}
+
 size_t findMatchingDelim(string s, string sd, string ed)
 {
 	string v = sd;
@@ -395,10 +400,10 @@ public:
 	{
 		// the key is name:type where name is this statement name, or its name property
 		string keyName;
-		if (!GetValue("name", keyName))
+		if (!GetValue("name", keyName, false, false))
 			keyName = name;
 		string value;
-		GetValue("type", value, true);
+		GetValue("type", value, false, false);
 		return keyName + ":" + value;
 	}
 
@@ -518,7 +523,7 @@ public:
 			}
 			string formatSpec = arguments[lastItem];
 			string formatResolved;
-			GetValue(formatSpec, formatResolved);
+			GetValue(formatSpec, formatResolved, false, false);
 			for (int i = 1; i < numArgs-1; i += 2) {
 				string varName = arguments[i];
 				string varValue = arguments[i + 1];
@@ -551,7 +556,7 @@ public:
 			string varName = arguments[1];
 			string value = arguments[2];
 			string varValue;
-			if (GetValue(varName, varValue))
+			if (GetValue(varName, varValue, false, false))
 			{
 				bool opValue = (varValue == value) ^ (op == "ifne");
 				if (opValue) {
@@ -572,7 +577,7 @@ public:
 			} // "c:\Users\George Cowsar\Projects\TankMateGen2\PageDefs" Truck Trailer FMCustomer FMStore Terminal Supplier Driver Order
 			for (int ndx = 1; ndx < lastItem; ndx++) {
 				string v, s = arguments[ndx];
-				bool hasValue = GetValue(s, v) && v.length() > 0;
+				bool hasValue = GetValue(s, v, false, false) && v.length() > 0;
 				if (hasValue && op == "if")
 					hasValue = v != "false";
 				//if (s == "lengthish")
@@ -590,11 +595,7 @@ public:
 		}
 		else if (op == "elif")
 		{
-			if (op == "elif") {
-				int x = 1;
-				x++;
-				lastValue = x == 1;
-			}
+			lastValue = false;
 			if (numArgs < 3)
 			{
 				OutputError(" elif: expression requires at least 2 arguments");
@@ -606,7 +607,7 @@ public:
 			}
 			for (int ndx = 1; ndx < lastItem; ndx++) {
 				string v, s = arguments[ndx];
-				bool hasValue = GetValue(s, v) && v.length() > 0;
+				bool hasValue = GetValue(s, v, false, false) && v.length() > 0;
 				if (!hasValue || (hasValue && op == "elif" && v == "false"))
 				{
 					ifstack.push_back(false);
@@ -635,7 +636,7 @@ public:
 			}
 			for (int ndx = 1; ndx < lastItem; ndx++) {
 				string v, s = arguments[ndx];
-				bool hasValue = GetValue(s, v) && v.length() > 0;
+				bool hasValue = GetValue(s, v, false, false) && v.length() > 0;
 				if (!hasValue || (hasValue && op == "elif" && v == "false"))
 				{
 					ifstack.push_back(false);
@@ -699,13 +700,14 @@ public:
 			}
 			return true;
 		}
-		else if (op == "foreach" || op == "foreach_ref") {
+		else if (op == "foreach" || op == "foreach_ref" || op == "foreach_reflist") {
 			if (numArgs < 3) {
 				OutputError(" foreach: expression requires 2 arguments, arg1 is the control variable and arg2 is the generated text");
 				return false;
 			}
 			string controlVar, controlVarName = arguments[1];
-			bool ref = op == "foreach_ref";
+			bool ref = startsWith(op, "foreach_ref");
+			bool reflist = ref && startsWith(op, "foreach_reflist");
 			if (!GetValue(controlVarName, controlVar)) {
 				OutputError(" foreach: could not get control variable value: " + controlVarName);
 				return false;
@@ -720,6 +722,9 @@ public:
 				variables[controlVarName] = ref ? "@" + s + "_" : s;
 				bool modified = ResolveReferences(text, numResolved, resolved);
 				result += text;
+				if (reflist && (it + 1) != varList.end()) {
+					result += ",";
+				}
 			}
 			return true;
 		}
@@ -795,7 +800,7 @@ public:
 		return false;
 	}
 
-	bool GetValue(string key, string& value, bool oneLevel=false)
+	bool GetValue(string key, string& value, bool oneLevel=false, bool referring=true)
 	{
 		VariableMap::iterator it = variables.find(key);
 		if (it != variables.end()) {
@@ -806,7 +811,10 @@ public:
 			return true;
 		}
 		else if (!oneLevel && parent) {
-			return parent->GetValue(key, value, oneLevel);
+			if (parent->GetValue(key, value, oneLevel, referring))
+				return true;
+			if (referring && referringStatement)
+				return referringStatement->GetValue(key, value, oneLevel, referring);
 		}
 		return false;
 	}
@@ -889,7 +897,7 @@ public:
 		//if (theTemplate.parent)
 			//theTemplate.ApplyVariables(*theTemplate.parent);
 		theTemplate.Evaluate(this);
-		theTemplate.GetValue("body", body, true);
+		theTemplate.GetValue("body", body, true, false);
 		string templateComment = startComment + " Template: " + theTemplate.GetKey() + " " + endComment + "\n";
 		output << templateComment;
 
@@ -1321,7 +1329,7 @@ public:
 	{ 
 		Statement& rootStatement = statements.GetRootStatement();
 		string templatesFile;
-		if (rootStatement.GetValue(templateType, templatesFile)) {
+		if (rootStatement.GetValue(templateType, templatesFile, true, false)) {
 			rootStatement.Evaluate(NULL);
 			templatesFile = ResolvePath(templatesFile);
 			StatementParser templateParser(templatesFile);
@@ -1369,8 +1377,8 @@ int main(int argc, char *argv[])
 
 		cout << "Get aspx and cs file names" << endl;
 		string pageClass, outputPath;
-		statementParser.GetRootStatement().GetValue("pageClass", pageClass);
-		statementParser.GetRootStatement().GetValue("outputPath", outputPath);
+		statementParser.GetRootStatement().GetValue("pageClass", pageClass, false, false);
+		statementParser.GetRootStatement().GetValue("outputPath", outputPath, false, false);
 		string classPrefix = ResolvePath(outputPath) + pageClass;
 		string aspxFile = classPrefix + ".aspx"; // path + pageClass + ".aspx.cs"
 		string csFile = classPrefix + ".aspx.cs";
